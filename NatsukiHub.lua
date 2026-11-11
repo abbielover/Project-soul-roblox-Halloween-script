@@ -1,8 +1,33 @@
+if not game:IsLoaded() then game.Loaded:Wait() end
+
 local RS, UIS, VIM, TS = game:GetService("RunService"), game:GetService("UserInputService"), game:GetService("VirtualInputManager"), game:GetService("TweenService")
 local Players, Stats, SoundService, Debris = game:GetService("Players"), game:GetService("Stats"), game:GetService("SoundService"), game:GetService("Debris")
+repeat task.wait() until Players.LocalPlayer
 local pl = Players.LocalPlayer
-local Ev = game:GetService("ReplicatedStorage").UT_BLINK_RELIABLE_REMOTE
 local par = (gethui and gethui()) or game:GetService("CoreGui")
+
+print("[Natsuki] PlaceId:", game.PlaceId)
+
+-- find the remote safely instead of crashing
+local RepS = game:GetService("ReplicatedStorage")
+local Ev = RepS:WaitForChild("UT_BLINK_RELIABLE_REMOTE", 10)
+if not Ev then
+    warn("[Natsuki] UT_BLINK_RELIABLE_REMOTE not found. Remotes in ReplicatedStorage:")
+    for _, d in ipairs(RepS:GetDescendants()) do
+        if d:IsA("RemoteEvent") or d:IsA("UnreliableRemoteEvent") then
+            print("  ", d:GetFullName(), d.ClassName)
+            if not Ev and d.Name:upper():find("BLINK") and d.Name:upper():find("RELIABLE") and not d.Name:upper():find("UNRELIABLE") then
+                Ev = d
+            end
+        end
+    end
+end
+if not Ev then
+    warn("[Natsuki] No remote found, GUI will load but farming can't send packets")
+    Ev = {FireServer = function() end}
+else
+    print("[Natsuki] Using remote:", Ev:GetFullName())
+end
 
 local LOGO_URL = "https://i.pinimg.com/736x/b9/a3/e4/b9a3e4f0af14cfe3d953dfd9b4d87d8d.jpg"
 local SLASH_URL = "https://www.myinstants.com/media/sounds/undertale-slash.mp3"
@@ -827,20 +852,19 @@ local gameName = "Unknown"
 pcall(function() gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name end)
 i2.Text = "Game: " .. gameName
 
--- Anti AFK (loads once)
+-- Anti AFK (built in, no remote code): answers Roblox's idle kick by simulating a click
 local afkLoaded = false
 local afkBtn
 afkBtn = button(pPlayer, "Anti AFK", function()
     if afkLoaded then return end
     afkLoaded = true
-    afkBtn.Text = "Anti AFK (loaded)"
-    task.spawn(function()
+    afkBtn.Text = "Anti AFK (on)"
+    pl.Idled:Connect(function()
         pcall(function()
-            loadstring(game:HttpGet("https://rscripts.net/api/telemetry/client.lua?s=66de7d638fb72e485f5cde56"))()
+            local VU = game:GetService("VirtualUser")
+            VU:CaptureController()
+            VU:ClickButton2(Vector2.new())
         end)
-    end)
-    pcall(function()
-        loadstring(game:HttpGet("https://raw.githubusercontent.com/hassanxzayn-lua/Anti-afk/main/antiafkbyhassanxzyn"))()
     end)
 end)
 
