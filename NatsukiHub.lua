@@ -185,6 +185,7 @@ local CANDY = "Monster Candy"
 local B = {
     set = {54,1,7,83,101,116,116,105,110,103},
     start = {54,1,5,83,116,97,114,116},
+    join = {112,1,4,74,111,105,110}, -- "Join" (Night Shift instant join)
 }
 local function buf(t) local b = buffer.create(#t) for i = 1, #t do buffer.writeu8(b, i - 1, t[i]) end return b end
 local function setS(n, v) Ev:FireServer(buf(B.set), {n, v}) end
@@ -579,6 +580,21 @@ local function label(page, text, key)
     return themed(new("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = text, Font = Enum.Font.Gotham, TextSize = 11, LayoutOrder = nextOrd()}, page), "TextColor3", key or "sub")
 end
 
+-- one-shot action button (fires onClick every time it is pressed)
+local function button(page, text, onClick)
+    local b = themed(new("TextButton", {
+        Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, Text = text, Font = Enum.Font.GothamBold,
+        TextSize = 14, AutoButtonColor = false, LayoutOrder = nextOrd(),
+    }, page), "BackgroundColor3", "card")
+    themed(b, "TextColor3", "text")
+    round(b, 8)
+    b.MouseButton1Click:Connect(function()
+        press(b)
+        onClick()
+    end)
+    return b
+end
+
 -- ===== MAIN tab =====
 local card = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 62), BorderSizePixel = 0, LayoutOrder = nextOrd()}, pMain), "BackgroundColor3", "card")
 round(card, 8)
@@ -625,6 +641,19 @@ toggle(pMain, "Auto Start (tp + Start)", "AutoStart")
 toggle(pMain, "Monster Candy swap", "Candy")
 toggle(pMain, "Skill (E) every few sec", "Skill")
 toggle(pMain, "Black screen behind UI", "Black", function() syncBlack() end)
+button(pMain, "Instant join Night Shift", function()
+    task.spawn(function()
+        -- teleport to the join spot first
+        local c = pl.Character
+        local r = c and c:FindFirstChild("HumanoidRootPart")
+        if r then
+            r.AssemblyLinearVelocity = Vector3.zero
+            r.CFrame = CFrame.new(1191, 342, -1493)
+            task.wait(.3) -- let the server register the new position
+        end
+        pcall(function() Ev:FireServer(buf(B.join), {}) end)
+    end)
+end)
 slider(pMain, "Teleport distance", 3, 15, 1, function() return S.Stop end, function(v) S.Stop = v end)
 slider(pMain, "Skill delay (s)", 2, 20, 1, function() return S.SDelay end, function(v) S.SDelay = v end)
 label(pMain, "Weapon = hotbar slot 1 (auto equip)")
@@ -922,5 +951,3 @@ slashFX(function()
     syncBlack()
     TS:Create(frame, TweenInfo.new(.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(W, H)}):Play()
 end)
-
--- nothing auto-runs: turn Auto Farm on yourself from the Main tab
