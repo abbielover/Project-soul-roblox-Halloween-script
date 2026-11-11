@@ -1,7 +1,7 @@
 if not game:IsLoaded() then game.Loaded:Wait() end
 
 local RS, UIS, VIM, TS = game:GetService("RunService"), game:GetService("UserInputService"), game:GetService("VirtualInputManager"), game:GetService("TweenService")
-local Players, Stats, SoundService, Debris = game:GetService("Players"), game:GetService("Stats"), game:GetService("SoundService"), game:GetService("Debris")
+local Players, Stats, SoundService = game:GetService("Players"), game:GetService("Stats"), game:GetService("SoundService")
 repeat task.wait() until Players.LocalPlayer
 local pl = Players.LocalPlayer
 local par = (gethui and gethui()) or game:GetService("CoreGui")
@@ -36,8 +36,8 @@ local TEXT_URL = "https://www.myinstants.com/media/sounds/undertale-text.mp3"
 local VANISH_URL = "https://www.myinstants.com/media/sounds/gaster-vanish.mp3"
 local LAUGH_URL = "https://www.myinstants.com/media/sounds/flowey-udnertale-laugh.mp3"
 local CHARA_URL = "https://i.pinimg.com/736x/c5/4c/0f/c54c0fdae6a9bd2336122e7e190d4881.jpg"
-local LAUGH_TIME = 2.5    -- seconds to wait for the laugh before the slashes start
-local SMALL_SLASHES = 3   -- how many small slashes before the huge one (max 5)
+local LAUGH_TIME = 2.5
+local SMALL_SLASHES = 3
 local ICONS = {
     {name = "Natsuki",        url = "https://i.pinimg.com/736x/af/f6/63/aff663b8b0907d12ebf8bcd30ebaa917.jpg"},
     {name = "Abbie",          url = "https://i.pinimg.com/736x/19/d6/d8/19d6d8b147505c5f82a4e44d69c64109.jpg"},
@@ -46,7 +46,6 @@ local ICONS = {
     {name = "Ena dream bbq",  url = "https://i.pinimg.com/736x/32/2d/aa/322daac377dce1aa59078bff50b5b03a.jpg"},
 }
 
--- name = button text, mob = name inside workspace.Mobs, spawn = where Auto Start teleports you
 local BOSSES = {
     {name = "Golden Freddy",  mob = "Golden Freddy",  spawn = CFrame.new(1285, 342, -1517)},
     {name = "Bonnie",         mob = "Bonnie",         spawn = CFrame.new(1189, 346, -1597)},
@@ -54,7 +53,7 @@ local BOSSES = {
     {name = "Freddy Fazbear", mob = "Freddy Fazbear", spawn = CFrame.new(1199, 346, -1597)},
     {name = "Foxy",           mob = "Foxy",           spawn = CFrame.new(1143, 344, -1563)},
 }
-local BI = 1 -- selected boss index
+local BI = 1
 
 local function new(c, p, parent)
     local i = Instance.new(c)
@@ -68,9 +67,27 @@ for _, n in ipairs({"NatsukiIntro", "NatsukiPrompt", "NatsukiStart", "NatsukiSla
     if o then o:Destroy() end
 end
 
+-- PC crash fix: only hand a file to getcustomasset if it really is a JPG/PNG/MP3.
+-- (A failed download saves an HTML error page; loading that as an image/sound can crash the PC client.)
+local function validData(d, kind)
+    if type(d) ~= "string" or #d < 200 then return false end
+    local a, b, c = d:byte(1, 3)
+    if kind == "img" then
+        return (a == 0xFF and b == 0xD8) or (a == 0x89 and b == 0x50 and c == 0x4E)
+    else
+        return (a == 0x49 and b == 0x44 and c == 0x33) or (a == 0xFF and b and b >= 0xE0)
+    end
+end
+
 local function dl(url, file)
     local ok, asset = pcall(function()
-        writefile(file, game:HttpGet(url))
+        local data = game:HttpGet(url)
+        if not validData(data, file:sub(-4) == ".mp3" and "snd" or "img") then
+            warn("[Natsuki] skipped invalid download: " .. file)
+            return nil
+        end
+        writefile(file, data)
+        task.wait(.05)
         return getcustomasset(file)
     end)
     return ok and asset or nil
@@ -79,26 +96,34 @@ end
 local logoAsset = dl(LOGO_URL, "natsuki_logo.jpg")
 local charaAsset = dl(CHARA_URL, "natsuki_chara.jpg")
 local BLACK, WHITE = Color3.new(0, 0, 0), Color3.new(1, 1, 1)
+local RED, ORANGE, GRAY = Color3.fromRGB(255, 30, 30), Color3.fromRGB(255, 140, 0), Color3.fromRGB(140, 140, 150)
+local FONT = Enum.Font.Arcade
 
--- sounds download in the background
+-- sounds download one by one in the background
 local slashAsset, heavyAsset, textAsset, vanishAsset, laughAsset, soundsDone
 task.spawn(function()
-    textAsset = dl(TEXT_URL, "natsuki_text.mp3")
-    slashAsset = dl(SLASH_URL, "natsuki_slash.mp3")
-    heavyAsset = dl(HEAVY_URL, "natsuki_heavy.mp3")
-    vanishAsset = dl(VANISH_URL, "natsuki_vanish.mp3")
+    textAsset = dl(TEXT_URL, "natsuki_text.mp3") task.wait(.1)
+    slashAsset = dl(SLASH_URL, "natsuki_slash.mp3") task.wait(.1)
+    heavyAsset = dl(HEAVY_URL, "natsuki_heavy.mp3") task.wait(.1)
+    vanishAsset = dl(VANISH_URL, "natsuki_vanish.mp3") task.wait(.1)
     laughAsset = dl(LAUGH_URL, "natsuki_laugh.mp3")
     soundsDone = true
 end)
 
+-- PC crash fix: one reusable Sound per asset (the old code made a new Sound for every typed letter)
+local soundCache = {}
 local function playSnd(asset, vol)
     if not asset then return end
-    local s = new("Sound", {SoundId = asset, Volume = vol or 1}, SoundService)
+    local s = soundCache[asset]
+    if not s then
+        s = new("Sound", {SoundId = asset}, SoundService)
+        soundCache[asset] = s
+    end
+    s.Volume = vol or 1
+    s.TimePosition = 0
     s:Play()
-    Debris:AddItem(s, 6)
 end
 
--- Undertale-style jitter
 local function shake(obj, base, amt, rate)
     local last = 0
     return RS.Heartbeat:Connect(function()
@@ -108,7 +133,7 @@ local function shake(obj, base, amt, rate)
     end)
 end
 
--- ================= Start screen (nothing runs until START is clicked) =================
+-- ================= Start screen =================
 local started, ready = false, false
 local startGui = new("ScreenGui", {Name = "NatsukiStart", IgnoreGuiInset = true, ResetOnSpawn = false, DisplayOrder = 1000}, par)
 local sbg = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BorderSizePixel = 0}, startGui)
@@ -119,11 +144,10 @@ local slogo = new("ImageLabel", {
 local titleBase = UDim2.new(0.5, 0, 0.14, 85)
 local stitle = new("TextLabel", {
     AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(420, 40), Position = titleBase,
-    BackgroundTransparency = 1, Text = "NATSUKI HUB", TextColor3 = WHITE, Font = Enum.Font.Arcade, TextSize = 34, TextTransparency = 1,
+    BackgroundTransparency = 1, Text = "NATSUKI HUB", TextColor3 = WHITE, Font = FONT, TextSize = 34, TextTransparency = 1,
 }, sbg)
 local titleShake = shake(stitle, titleBase, 2, .04)
 
--- Chara + speech bubble
 local charaBase = UDim2.new(0.5, -170, 0.52, 0)
 local chara = new("ImageLabel", {
     AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(150, 150), Position = charaBase,
@@ -141,29 +165,28 @@ local bubble = new("Frame", {
 new("UIStroke", {Color = BLACK, Thickness = 4}, bubble)
 local btext = new("TextLabel", {
     Size = UDim2.new(1, -20, 1, -16), Position = UDim2.fromOffset(10, 8), BackgroundTransparency = 1, Text = "",
-    TextColor3 = BLACK, Font = Enum.Font.Arcade, TextSize = 22, TextWrapped = true, ZIndex = 5,
+    TextColor3 = BLACK, Font = FONT, TextSize = 22, TextWrapped = true, ZIndex = 5,
     TextXAlignment = Enum.TextXAlignment.Left, TextYAlignment = Enum.TextYAlignment.Center,
 }, bubble)
 
--- typewriter: reveals the text letter by letter and plays the Undertale text blip
 local function say(text, delay)
     btext.Text = ""
     for i = 1, #text do
         btext.Text = string.sub(text, 1, i)
-        if string.sub(text, i, i) ~= " " then playSnd(textAsset, .5) end
+        if string.sub(text, i, i) ~= " " then playSnd(textAsset, .4) end
         task.wait(delay or .06)
     end
 end
 
 local sbtn = new("TextButton", {
     AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(200, 50), Position = UDim2.new(0.5, 0, 0.82, 0),
-    BackgroundColor3 = BLACK, BorderSizePixel = 0, Text = "START", TextColor3 = WHITE, Font = Enum.Font.Arcade,
+    BackgroundColor3 = BLACK, BorderSizePixel = 0, Text = "START", TextColor3 = WHITE, Font = FONT,
     TextSize = 26, AutoButtonColor = false, TextTransparency = 1,
 }, sbg)
 local sstroke = new("UIStroke", {Color = WHITE, Thickness = 3, Transparency = 1, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, sbtn)
 local heart = new("TextLabel", {
     AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(30, 30), Position = UDim2.new(0.5, -135, 0.82, 0),
-    BackgroundTransparency = 1, Text = "♥", TextColor3 = Color3.fromRGB(255, 30, 30), Font = Enum.Font.GothamBold, TextSize = 26, TextTransparency = 1,
+    BackgroundTransparency = 1, Text = "♥", TextColor3 = RED, Font = Enum.Font.GothamBold, TextSize = 26, TextTransparency = 1,
 }, sbg)
 local scredit = new("TextLabel", {
     AnchorPoint = Vector2.new(0.5, 0.5), Size = UDim2.fromOffset(400, 20), Position = UDim2.new(0.5, 0, 0.95, 0),
@@ -182,10 +205,8 @@ do
     TS:Create(scredit, fi, {TextTransparency = 0}):Play()
 end
 
--- Chara greets you
 task.spawn(function()
     task.wait(1.3)
-    -- wait for the text sound so the first letters aren't silent
     local t0 = os.clock()
     while not textAsset and os.clock() - t0 < 4 do task.wait() end
     tail.Visible, bubble.Visible = true, true
@@ -210,13 +231,12 @@ local CANDY = "Monster Candy"
 local B = {
     set = {54,1,7,83,101,116,116,105,110,103},
     start = {54,1,5,83,116,97,114,116},
-    join = {112,1,4,74,111,105,110}, -- "Join" (Night Shift instant join)
+    join = {112,1,4,74,111,105,110},
 }
 local function buf(t) local b = buffer.create(#t) for i = 1, #t do buffer.writeu8(b, i - 1, t[i]) end return b end
 local function setS(n, v) Ev:FireServer(buf(B.set), {n, v}) end
 local function pressKey(k) pcall(function() VIM:SendKeyEvent(true, k, false, game) task.wait(.05) VIM:SendKeyEvent(false, k, false, game) end) end
 
--- Builds the OnEquipped packet for any tool name: 3,1,1,<name length>,<name>,10,"OnEquipped"
 local function equipBytes(name)
     local t = {3, 1, 1, #name}
     for i = 1, #name do t[#t + 1] = string.byte(name, i) end
@@ -225,7 +245,6 @@ local function equipBytes(name)
     return t
 end
 
--- Equips a specific tool by name (used for Monster Candy)
 local function equip(n)
     local c = pl.Character local h = c and c:FindFirstChildOfClass("Humanoid") if not h then return end
     local t = c:FindFirstChild(n)
@@ -237,7 +256,6 @@ local function equip(n)
     return t
 end
 
--- Hotbar slot 1 (whatever weapon is in it)
 local function slotButton()
     local inv = pl.PlayerGui:FindFirstChild("Inventory")
     local main = inv and inv:FindFirstChild("Main")
@@ -261,7 +279,6 @@ local function clickSlot()
     return true
 end
 
--- The weapon currently held = any tool in your character that isn't the candy
 local function heldWeapon()
     local c = pl.Character
     if not c then return nil end
@@ -270,7 +287,6 @@ local function heldWeapon()
     end
 end
 
--- Auto equip slot 1. Only clicks when no weapon is held (clicking again would unequip it)
 local function equipWeapon()
     local w = heldWeapon()
     if w then return w end
@@ -280,7 +296,7 @@ local function equipWeapon()
         w = heldWeapon()
         if w then return w end
     end
-    pressKey(Enum.KeyCode.One) -- fallback: the "1" hotkey
+    pressKey(Enum.KeyCode.One)
     for _ = 1, 12 do
         task.wait(.05)
         w = heldWeapon()
@@ -288,7 +304,6 @@ local function equipWeapon()
     end
 end
 
--- Hitbox of the currently selected boss: workspace.Mobs.<mob>.Hitbox
 local function hb()
     local m = workspace:FindFirstChild("Mobs")
     local b = m and m:FindFirstChild(BOSSES[BI].mob)
@@ -296,7 +311,6 @@ local function hb()
 end
 local function pos(h) return h:IsA("BasePart") and h.Position or h:GetPivot().Position end
 
--- everything starts OFF
 local F = {Farm = false, AutoStart = false, Candy = false, Skill = false, Black = false, AutoAgain = false, AutoVote = false, SafeTP = false}
 local sid, conn, swap = 0, nil, false
 local function alive(i) return F.Farm and sid == i end
@@ -320,7 +334,6 @@ local function start()
             local h = hb()
             if h and h ~= cur then cur = h at = os.clock() elseif not h and cur then cur = nil end
             r.Anchored = false
-            -- teleport next to the target (S.Stop studs away), only when we're not already there
             if h and os.clock() - at >= S.WDelay then
                 local tpos = pos(h)
                 local flat = Vector3.new(r.Position.X - tpos.X, 0, r.Position.Z - tpos.Z)
@@ -333,7 +346,7 @@ local function start()
                 end
             end
         end)
-        task.spawn(function() -- auto equip slot 1 + clicking
+        task.spawn(function()
             while alive(id) do
                 if not swap then
                     local t = heldWeapon() or equipWeapon()
@@ -342,7 +355,7 @@ local function start()
                 task.wait(.05)
             end
         end)
-        task.spawn(function() -- skill E
+        task.spawn(function()
             local last, was = os.clock(), false
             while alive(id) do
                 local a = F.Skill and not swap and heldWeapon() ~= nil and hb() ~= nil
@@ -352,7 +365,7 @@ local function start()
                 task.wait(.2)
             end
         end)
-        task.spawn(function() -- candy swap
+        task.spawn(function()
             while alive(id) do
                 task.wait(10) if not alive(id) then break end
                 if F.Candy then
@@ -420,36 +433,25 @@ pl.CharacterAdded:Connect(function()
     if selIcon ~= 0 then task.wait(2) setIcon(selIcon) end
 end)
 
--- ================= Theme system =================
-local PRESETS = {
-    {"Natsuki", Color3.fromRGB(150, 100, 255), Color3.fromRGB(18, 18, 24), Color3.fromRGB(30, 28, 42)},
-    {"Ocean",   Color3.fromRGB(50, 150, 255),  Color3.fromRGB(14, 20, 30), Color3.fromRGB(24, 34, 50)},
-    {"Crimson", Color3.fromRGB(235, 60, 80),   Color3.fromRGB(22, 14, 16), Color3.fromRGB(40, 24, 28)},
-    {"Emerald", Color3.fromRGB(50, 205, 120),  Color3.fromRGB(14, 22, 18), Color3.fromRGB(24, 40, 32)},
-    {"Sakura",  Color3.fromRGB(255, 130, 180), Color3.fromRGB(28, 18, 24), Color3.fromRGB(46, 28, 38)},
-    {"Mono",    Color3.fromRGB(220, 220, 230), Color3.fromRGB(14, 14, 14), Color3.fromRGB(30, 30, 30)},
+-- ================= Undertale-style theme =================
+local ACCENTS = {
+    Color3.fromRGB(255, 255, 0),   -- yellow (default, like a selected option)
+    Color3.fromRGB(255, 140, 0),   -- orange
+    Color3.fromRGB(255, 30, 30),   -- red
+    Color3.fromRGB(0, 255, 255),   -- cyan
+    Color3.fromRGB(80, 255, 120),  -- green
+    Color3.fromRGB(255, 130, 180), -- pink
 }
-local T = {accent = PRESETS[1][2], bg = PRESETS[1][3], card = PRESETS[1][4], text = Color3.fromRGB(235, 235, 245), sub = Color3.fromRGB(150, 150, 170)}
-T.off = T.card:Lerp(WHITE, 0.15)
+local T = {accent = ACCENTS[1]}
+local refreshers = {}
+local function applyTheme() for _, f in ipairs(refreshers) do f() end end
+local function reg(f) refreshers[#refreshers + 1] = f f() end
 
-local reg, refreshers = {}, {}
-local function themed(obj, prop, key) table.insert(reg, {obj, prop, key}) obj[prop] = T[key] return obj end
-local headerGrad, stroke
-local function applyTheme()
-    T.off = T.card:Lerp(WHITE, 0.15)
-    for _, r in ipairs(reg) do r[1][r[2]] = T[r[3]] end
-    if headerGrad then headerGrad.Color = ColorSequence.new(T.accent:Lerp(BLACK, 0.45), T.card) end
-    if stroke then stroke.Color = T.accent end
-    for _, f in ipairs(refreshers) do f() end
-end
-local function round(o, r) new("UICorner", {CornerRadius = UDim.new(0, r or 8)}, o) end
-
--- click animation (quick squash + bounce back)
 local function press(o)
     local s = o:FindFirstChild("PressScale") or new("UIScale", {Name = "PressScale"}, o)
-    TS:Create(s, TweenInfo.new(.08, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = .94}):Play()
-    task.delay(.08, function()
-        TS:Create(s, TweenInfo.new(.28, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Scale = 1}):Play()
+    TS:Create(s, TweenInfo.new(.06, Enum.EasingStyle.Quad), {Scale = .96}):Play()
+    task.delay(.06, function()
+        TS:Create(s, TweenInfo.new(.15, Enum.EasingStyle.Quad), {Scale = 1}):Play()
     end)
 end
 
@@ -457,109 +459,115 @@ end
 local blackGui = new("ScreenGui", {Name = "NatsukiBlack", IgnoreGuiInset = true, ResetOnSpawn = false, DisplayOrder = 900, Enabled = false}, par)
 new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BorderSizePixel = 0}, blackGui)
 
--- ================= GUI (landscape, sidebar left) =================
+-- ================= GUI: Undertale battle-menu style =================
 local ord = 0
 local function nextOrd() ord += 1 return ord end
 
 local cam = workspace.CurrentCamera
 local vp = (cam and cam.ViewportSize) or Vector2.new(800, 500)
-local W, H = math.clamp(vp.X - 24, 300, 560), math.clamp(vp.Y - 24, 220, 340)
-local SB = 120
+local W, H = math.clamp(vp.X - 24, 300, 560), math.clamp(vp.Y - 24, 240, 350)
+local TOP, BOT = 34, 46
 
 local gui = new("ScreenGui", {Name = "NatsukiHub", ResetOnSpawn = false, DisplayOrder = 950, Enabled = false}, par)
 local live = false
 local function syncBlack() blackGui.Enabled = live and F.Black and gui.Enabled end
 
-local frame = themed(new("Frame", {
+local frame = new("Frame", {
     AnchorPoint = Vector2.new(0.5, 0.5), Position = UDim2.fromScale(0.5, 0.5),
-    Size = UDim2.fromOffset(W, H), BorderSizePixel = 0, ClipsDescendants = true,
-}, gui), "BackgroundColor3", "bg")
-round(frame, 10)
-stroke = new("UIStroke", {Color = T.accent, Thickness = 1.2, Transparency = 0.3}, frame)
+    Size = UDim2.fromOffset(W, H), BorderSizePixel = 0, BackgroundColor3 = BLACK, ClipsDescendants = true,
+}, gui)
+new("UIStroke", {Color = WHITE, Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, frame)
+local pop = new("UIScale", {Scale = 1}, frame)
 
--- header
-local header = new("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = WHITE, BorderSizePixel = 0}, frame)
-headerGrad = new("UIGradient", {Rotation = 0}, header)
-new("ImageLabel", {Size = UDim2.fromOffset(28, 28), Position = UDim2.fromOffset(8, 6), BackgroundTransparency = 1, Image = logoAsset or "", ScaleType = Enum.ScaleType.Fit}, header)
+-- top bar (drag handle): NAME  LV  HP [bar]  stats  - X
+local header = new("Frame", {Size = UDim2.new(1, 0, 0, TOP), BackgroundTransparency = 1}, frame)
 local hubTitle = new("TextLabel", {
-    Size = UDim2.new(0, 150, 1, 0), Position = UDim2.fromOffset(44, 0), BackgroundTransparency = 1,
-    Text = "Natsuki Hub", TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
+    Size = UDim2.fromOffset(150, TOP), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1,
+    Text = "NATSUKI  LV 19", TextColor3 = WHITE, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left,
 }, header)
-shake(hubTitle, UDim2.fromOffset(44, 0), 1, .05)
+local titleBase2 = UDim2.fromOffset(10, 0)
+local titleShake2 = shake(hubTitle, titleBase2, 1, .08)
+new("TextLabel", {Size = UDim2.fromOffset(24, TOP), Position = UDim2.fromOffset(160, 0), BackgroundTransparency = 1, Text = "HP", TextColor3 = WHITE, Font = FONT, TextSize = 11}, header)
+local hpBar = new("Frame", {Size = UDim2.fromOffset(56, 14), Position = UDim2.fromOffset(186, (TOP - 14) / 2), BackgroundColor3 = RED, BorderSizePixel = 0}, header)
+local hpFill = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = Color3.fromRGB(255, 255, 0), BorderSizePixel = 0}, hpBar)
+local hpText = new("TextLabel", {Size = UDim2.fromOffset(64, TOP), Position = UDim2.fromOffset(248, 0), BackgroundTransparency = 1, Text = "- / -", TextColor3 = WHITE, Font = FONT, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, header)
 local statLbl = new("TextLabel", {
-    Size = UDim2.new(0, 190, 1, 0), Position = UDim2.new(1, -258, 0, 0), BackgroundTransparency = 1, Text = "FPS: --  |  Ping: --",
-    TextColor3 = T.text, Font = Enum.Font.GothamMedium, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, RichText = true, Visible = W >= 460,
+    Size = UDim2.fromOffset(190, TOP), Position = UDim2.new(1, -250, 0, 0), BackgroundTransparency = 1, Text = "",
+    TextColor3 = WHITE, Font = FONT, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Right, RichText = true, Visible = W >= 520,
 }, header)
-local minBtn = new("TextButton", {Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -62, 0, 7), BackgroundTransparency = 1, Text = "-", TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 20}, header)
-local closeBtn = new("TextButton", {Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 7), BackgroundTransparency = 1, Text = "X", TextColor3 = Color3.fromRGB(255, 100, 100), Font = Enum.Font.GothamBold, TextSize = 14}, header)
+local minBtn = new("TextButton", {Size = UDim2.fromOffset(26, TOP), Position = UDim2.new(1, -56, 0, 0), BackgroundTransparency = 1, Text = "-", TextColor3 = WHITE, Font = FONT, TextSize = 22}, header)
+local closeBtn = new("TextButton", {Size = UDim2.fromOffset(26, TOP), Position = UDim2.new(1, -30, 0, 0), BackgroundTransparency = 1, Text = "X", TextColor3 = RED, Font = FONT, TextSize = 18}, header)
 
--- body
-local body = new("Frame", {Position = UDim2.fromOffset(0, 40), Size = UDim2.new(1, 0, 1, -40), BackgroundTransparency = 1}, frame)
-local sidebar = themed(new("Frame", {Size = UDim2.new(0, SB, 1, 0), BorderSizePixel = 0}, body), "BackgroundColor3", "card")
-local content = new("Frame", {Position = UDim2.fromOffset(SB + 8, 8), Size = UDim2.new(1, -(SB + 16), 1, -16), BackgroundTransparency = 1, ClipsDescendants = true}, body)
-
-local selector = themed(new("Frame", {Size = UDim2.new(1, -16, 0, 30), Position = UDim2.fromOffset(8, 8), BorderSizePixel = 0}, sidebar), "BackgroundColor3", "accent")
-round(selector, 6)
+-- body: dialogue box (white border) + bottom buttons (orange border)
+local bodyHolder = new("Frame", {Position = UDim2.fromOffset(0, TOP), Size = UDim2.new(1, 0, 1, -TOP), BackgroundTransparency = 1}, frame)
+local box = new("Frame", {Position = UDim2.fromOffset(10, 4), Size = UDim2.new(1, -20, 1, -(BOT + 10)), BackgroundColor3 = BLACK, BorderSizePixel = 0}, bodyHolder)
+new("UIStroke", {Color = WHITE, Thickness = 3, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, box)
 
 local TABS = {"Main", "Night Shift", "Player", "Icons", "Theme"}
-local pages, sfs, tabBtns = {}, {}, {}
+local TABTXT = {Main = "MAIN", ["Night Shift"] = "NIGHT", Player = "PLAYER", Icons = "ICONS", Theme = "THEME"}
+local pages, sfs, tabBtns, tabStroke = {}, {}, {}, {}
+local tw = (W - 20 - 4 * 6) / 5
 for idx, name in ipairs(TABS) do
-    local cg = new("CanvasGroup", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false}, content)
+    local pg = new("Frame", {Size = UDim2.new(1, -16, 1, -16), Position = UDim2.fromOffset(8, 8), BackgroundTransparency = 1, Visible = false}, box)
     local sf = new("ScrollingFrame", {
-        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
-        AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(), ScrollingDirection = Enum.ScrollingDirection.Y,
-    }, cg)
-    new("UIListLayout", {Padding = UDim.new(0, 6), SortOrder = Enum.SortOrder.LayoutOrder}, sf)
-    new("UIPadding", {PaddingRight = UDim.new(0, 6), PaddingBottom = UDim.new(0, 6)}, sf)
-    pages[name], sfs[name] = cg, sf
+        Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 4,
+        ScrollBarImageColor3 = WHITE, AutomaticCanvasSize = Enum.AutomaticSize.Y, CanvasSize = UDim2.new(),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+    }, pg)
+    new("UIListLayout", {Padding = UDim.new(0, 4), SortOrder = Enum.SortOrder.LayoutOrder}, sf)
+    new("UIPadding", {PaddingRight = UDim.new(0, 8), PaddingBottom = UDim.new(0, 4)}, sf)
+    pages[name], sfs[name] = pg, sf
 
     local b = new("TextButton", {
-        Size = UDim2.new(1, -16, 0, 30), Position = UDim2.fromOffset(8, 8 + (idx - 1) * 34), BackgroundTransparency = 1,
-        BorderSizePixel = 0, Text = name, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = T.sub, AutoButtonColor = false,
-    }, sidebar)
+        Size = UDim2.fromOffset(tw, 34), Position = UDim2.new(0, 10 + (idx - 1) * (tw + 6), 1, -(BOT - 2)),
+        BackgroundColor3 = BLACK, BorderSizePixel = 0, Text = TABTXT[name], Font = FONT, TextSize = 14,
+        TextColor3 = ORANGE, AutoButtonColor = false, TextScaled = true,
+    }, bodyHolder)
+    new("UITextSizeConstraint", {MaxTextSize = 15, MinTextSize = 8}, b)
+    tabStroke[name] = new("UIStroke", {Color = ORANGE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, b)
     tabBtns[name] = b
 end
 local pMain, pNight, pPlayer, pIcons, pTheme = sfs.Main, sfs["Night Shift"], sfs.Player, sfs.Icons, sfs.Theme
 
 local currentTab = "Main"
-local function showTab(name, anim)
-    currentTab = name
-    for n, p in pairs(pages) do if n ~= name then p.Visible = false end end
-    TS:Create(selector, TweenInfo.new(.28, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {Position = tabBtns[name].Position}):Play()
+local function refreshTabs()
     for n, b in pairs(tabBtns) do
-        TS:Create(b, TweenInfo.new(.2), {TextColor3 = (n == name) and WHITE or T.sub}):Play()
+        local on = n == currentTab
+        b.TextColor3 = on and T.accent or ORANGE
+        tabStroke[n].Color = on and T.accent or ORANGE
     end
-    local p = pages[name]
-    p.Visible = true
-    if anim then
-        p.GroupTransparency = 1
-        p.Position = UDim2.fromOffset(0, 18)
-        TS:Create(p, TweenInfo.new(.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out), {GroupTransparency = 0, Position = UDim2.fromOffset(0, 0)}):Play()
-    else
-        p.GroupTransparency = 0
-        p.Position = UDim2.fromOffset(0, 0)
-    end
+end
+reg(refreshTabs)
+local function showTab(name)
+    currentTab = name
+    for n, p in pairs(pages) do p.Visible = (n == name) end
+    refreshTabs()
 end
 for n, b in pairs(tabBtns) do
-    b.MouseButton1Click:Connect(function() press(b) showTab(n, true) end)
+    b.MouseButton1Click:Connect(function() press(b) showTab(n) end)
 end
 
--- builders
-local function toggle(page, label, flag, onChange)
-    local row = themed(new("TextButton", {Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrd()}, page), "BackgroundColor3", "card")
-    round(row, 8)
-    themed(new("TextLabel", {Size = UDim2.new(1, -60, 1, 0), Position = UDim2.fromOffset(10, 0), BackgroundTransparency = 1, Text = label, Font = Enum.Font.Gotham, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left}, row), "TextColor3", "text")
-    local pill = new("Frame", {Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -48, 0.5, -10), BorderSizePixel = 0}, row)
-    round(pill, 10)
-    local knob = new("Frame", {Size = UDim2.fromOffset(16, 16), Position = UDim2.fromOffset(2, 2), BackgroundColor3 = WHITE, BorderSizePixel = 0}, pill)
-    round(knob, 8)
+-- ===== builders =====
+local function makeRow(page, h)
+    local row = new("TextButton", {Size = UDim2.new(1, 0, 0, h), BackgroundTransparency = 1, BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrd()}, page)
+    local hrt = new("TextLabel", {Size = UDim2.fromOffset(18, 26), BackgroundTransparency = 1, Text = "♥", TextColor3 = RED, Font = Enum.Font.GothamBold, TextSize = 15, Visible = false}, row)
+    return row, hrt
+end
+
+local function toggle(page, text, flag, onChange)
+    local row, hrt = makeRow(page, 26)
+    local lbl = new("TextLabel", {Size = UDim2.new(1, -80, 0, 26), Position = UDim2.fromOffset(22, 0), BackgroundTransparency = 1, Text = "* " .. text, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = WHITE}, row)
+    local st = new("TextLabel", {Size = UDim2.fromOffset(50, 26), Position = UDim2.new(1, -50, 0, 0), BackgroundTransparency = 1, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Right}, row)
+    local hov = false
     local function refresh()
         local on = F[flag]
-        TS:Create(pill, TweenInfo.new(.15), {BackgroundColor3 = on and T.accent or T.off}):Play()
-        TS:Create(knob, TweenInfo.new(.2, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = on and UDim2.fromOffset(20, 2) or UDim2.fromOffset(2, 2)}):Play()
+        st.Text = on and "[ON]" or "[OFF]"
+        st.TextColor3 = on and T.accent or GRAY
+        lbl.TextColor3 = (on or hov) and T.accent or WHITE
     end
-    refresh()
-    refreshers[#refreshers + 1] = refresh
+    reg(refresh)
+    row.MouseEnter:Connect(function() hov = true hrt.Visible = true refresh() end)
+    row.MouseLeave:Connect(function() hov = false hrt.Visible = false refresh() end)
     row.MouseButton1Click:Connect(function()
         press(row)
         F[flag] = not F[flag]
@@ -570,27 +578,28 @@ local function toggle(page, label, flag, onChange)
 end
 
 local function slider(page, name, min, max, step, get, set)
-    local row = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 40), BorderSizePixel = 0, LayoutOrder = nextOrd()}, page), "BackgroundColor3", "card")
-    round(row, 8)
-    local lbl = themed(new("TextLabel", {Size = UDim2.new(1, -20, 0, 18), Position = UDim2.fromOffset(10, 3), BackgroundTransparency = 1, Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left}, row), "TextColor3", "text")
-    local barF = themed(new("Frame", {Size = UDim2.new(1, -20, 0, 6), Position = UDim2.fromOffset(10, 27), BorderSizePixel = 0}, row), "BackgroundColor3", "off")
-    round(barF, 3)
-    local fill = themed(new("Frame", {Size = UDim2.fromScale(0, 1), BorderSizePixel = 0}, barF), "BackgroundColor3", "accent")
-    round(fill, 3)
-    local hit = new("TextButton", {Size = UDim2.new(1, -20, 0, 20), Position = UDim2.fromOffset(10, 20), BackgroundTransparency = 1, Text = ""}, row)
+    local row, hrt = makeRow(page, 38)
+    local lbl = new("TextLabel", {Size = UDim2.new(1, -22, 0, 20), Position = UDim2.fromOffset(22, 0), BackgroundTransparency = 1, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = WHITE}, row)
+    local barF = new("Frame", {Size = UDim2.new(1, -30, 0, 8), Position = UDim2.fromOffset(22, 24), BackgroundColor3 = BLACK, BorderSizePixel = 0}, row)
+    new("UIStroke", {Color = WHITE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, barF)
+    local fill = new("Frame", {Size = UDim2.fromScale(0, 1), BorderSizePixel = 0}, barF)
+    local hov = false
     local function update()
         fill.Size = UDim2.fromScale((get() - min) / (max - min), 1)
-        lbl.Text = name .. ": " .. get()
+        fill.BackgroundColor3 = T.accent
+        lbl.Text = "* " .. name .. ": " .. get()
+        lbl.TextColor3 = hov and T.accent or WHITE
     end
-    update()
-    refreshers[#refreshers + 1] = update
+    reg(update)
+    row.MouseEnter:Connect(function() hov = true hrt.Visible = true update() end)
+    row.MouseLeave:Connect(function() hov = false hrt.Visible = false update() end)
     local sliding = false
     local function setX(x)
-        local a = math.clamp((x - barF.AbsolutePosition.X) / barF.AbsoluteSize.X, 0, 1)
+        local a = math.clamp((x - barF.AbsolutePosition.X) / math.max(barF.AbsoluteSize.X, 1), 0, 1)
         set(math.floor((min + (max - min) * a) / step + .5) * step)
         update()
     end
-    hit.InputBegan:Connect(function(i)
+    row.InputBegan:Connect(function(i)
         if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then sliding = true setX(i.Position.X) end
     end)
     UIS.InputChanged:Connect(function(i)
@@ -601,59 +610,61 @@ local function slider(page, name, min, max, step, get, set)
     end)
 end
 
-local function label(page, text, key)
-    return themed(new("TextLabel", {Size = UDim2.new(1, 0, 0, 16), BackgroundTransparency = 1, Text = text, Font = Enum.Font.Gotham, TextSize = 11, LayoutOrder = nextOrd()}, page), "TextColor3", key or "sub")
+local function label(page, text, bright)
+    return new("TextLabel", {
+        Size = UDim2.new(1, 0, 0, 18), AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = text,
+        Font = FONT, TextSize = 13, TextWrapped = true, TextXAlignment = Enum.TextXAlignment.Left,
+        TextColor3 = bright and WHITE or GRAY, LayoutOrder = nextOrd(),
+    }, page)
 end
 
--- one-shot action button (fires onClick every time it is pressed)
 local function button(page, text, onClick)
-    local b = themed(new("TextButton", {
-        Size = UDim2.new(1, 0, 0, 32), BorderSizePixel = 0, Text = text, Font = Enum.Font.GothamBold,
-        TextSize = 14, AutoButtonColor = false, LayoutOrder = nextOrd(),
-    }, page), "BackgroundColor3", "card")
-    themed(b, "TextColor3", "text")
-    round(b, 8)
-    b.MouseButton1Click:Connect(function()
-        press(b)
-        onClick()
-    end)
-    return b
+    local row, hrt = makeRow(page, 26)
+    local lbl = new("TextLabel", {Size = UDim2.new(1, -22, 0, 26), Position = UDim2.fromOffset(22, 0), BackgroundTransparency = 1, Text = "* " .. text, Font = FONT, TextSize = 15, TextXAlignment = Enum.TextXAlignment.Left, TextColor3 = WHITE}, row)
+    local hov = false
+    local function refresh() lbl.TextColor3 = hov and T.accent or WHITE end
+    reg(refresh)
+    row.MouseEnter:Connect(function() hov = true hrt.Visible = true refresh() end)
+    row.MouseLeave:Connect(function() hov = false hrt.Visible = false refresh() end)
+    row.MouseButton1Click:Connect(function() press(row) onClick() end)
+    return row, lbl
 end
 
 -- ===== MAIN tab =====
-local card = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 62), BorderSizePixel = 0, LayoutOrder = nextOrd()}, pMain), "BackgroundColor3", "card")
-round(card, 8)
+label(pMain, "* Natsuki Hub fills you with DETERMINATION.", true)
+local statCard = new("Frame", {Size = UDim2.new(1, 0, 0, 56), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pMain)
 local function statusLine(y)
-    return themed(new("TextLabel", {Size = UDim2.new(1, -16, 0, 18), Position = UDim2.fromOffset(8, y), BackgroundTransparency = 1, Text = "", Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, RichText = true}, card), "TextColor3", "text")
+    return new("TextLabel", {Size = UDim2.new(1, 0, 0, 18), Position = UDim2.fromOffset(0, y), BackgroundTransparency = 1, Text = "", Font = FONT, TextSize = 14, TextColor3 = WHITE, TextXAlignment = Enum.TextXAlignment.Left, RichText = true}, statCard)
 end
-local stA, stB, stC = statusLine(5), statusLine(22), statusLine(39)
+local stA, stB, stC = statusLine(0), statusLine(18), statusLine(36)
 
--- boss selector
-label(pMain, "Target boss", "text")
-local chipFrame = new("Frame", {Size = UDim2.new(1, 0, 0, 62), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pMain)
-new("UIGridLayout", {CellSize = UDim2.new(1/3, -4, 0, 28), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder}, chipFrame)
-local chips = {}
+label(pMain, "* Target boss", true)
+local chipFrame = new("Frame", {Size = UDim2.new(1, 0, 0, 66), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pMain)
+new("UIGridLayout", {CellSize = UDim2.new(1/3, -6, 0, 28), CellPadding = UDim2.fromOffset(6, 6), SortOrder = Enum.SortOrder.LayoutOrder}, chipFrame)
+local chips, chipStroke = {}, {}
 local function refreshChips()
     for i, c in ipairs(chips) do
-        TS:Create(c, TweenInfo.new(.2), {BackgroundColor3 = (i == BI) and T.accent or T.card}):Play()
+        local on = i == BI
+        c.TextColor3 = on and T.accent or WHITE
+        chipStroke[i].Color = on and T.accent or WHITE
     end
 end
-refreshers[#refreshers + 1] = refreshChips
 for i, b in ipairs(BOSSES) do
     local c = new("TextButton", {
-        BorderSizePixel = 0, Text = b.name, Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = WHITE,
-        AutoButtonColor = false, LayoutOrder = i, BackgroundColor3 = T.card,
+        BorderSizePixel = 0, Text = b.name, Font = FONT, TextSize = 12, TextColor3 = WHITE, TextScaled = true,
+        AutoButtonColor = false, LayoutOrder = i, BackgroundColor3 = BLACK,
     }, chipFrame)
-    round(c, 6)
+    new("UITextSizeConstraint", {MaxTextSize = 13, MinTextSize = 7}, c)
+    chipStroke[i] = new("UIStroke", {Color = WHITE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, c)
     chips[i] = c
     c.MouseButton1Click:Connect(function()
         press(c)
         BI = i
         refreshChips()
-        if F.Farm then start() end -- restart on the new boss
+        if F.Farm then start() end
     end)
 end
-refreshChips()
+reg(refreshChips)
 
 local farmRefresh
 local function setFarm(on)
@@ -668,8 +679,8 @@ toggle(pMain, "Skill (E) every few sec", "Skill")
 toggle(pMain, "Black screen behind UI", "Black", function() syncBlack() end)
 slider(pMain, "Teleport distance", 3, 15, 1, function() return S.Stop end, function(v) S.Stop = v end)
 slider(pMain, "Skill delay (s)", 2, 20, 1, function() return S.SDelay end, function(v) S.SDelay = v end)
-label(pMain, "Weapon = hotbar slot 1 (auto equip)")
-label(pMain, "RightShift = hide / show")
+label(pMain, "* Weapon = hotbar slot 1 (auto equip)")
+label(pMain, "* RightShift = hide / show")
 
 -- ===== NIGHT SHIFT tab =====
 local NS = {Delay = 3, Pause = 0}
@@ -683,7 +694,6 @@ local function nightAction(...)
     end)
 end
 
--- is o (and everything between it and root) actually visible?
 local function shown(o, root)
     while o and o ~= root do
         if o:IsA("GuiObject") and not o.Visible then return false end
@@ -692,14 +702,13 @@ local function shown(o, root)
     return true
 end
 
--- a night box counts as locked if it has a visible "lock" object inside, a Locked attribute, or a disabled button
-local function isLocked(box)
-    if box:GetAttribute("Locked") == true then return true end
-    if box:IsA("GuiButton") and (not box.Active or box.Interactable == false) then return true end
-    for _, d in ipairs(box:GetDescendants()) do
+local function isLocked(bx)
+    if bx:GetAttribute("Locked") == true then return true end
+    if bx:IsA("GuiButton") and (not bx.Active or bx.Interactable == false) then return true end
+    for _, d in ipairs(bx:GetDescendants()) do
         if d:IsA("GuiObject") then
             local nm = d.Name:lower()
-            if nm:find("lock") and not nm:find("unlock") and shown(d, box) then
+            if nm:find("lock") and not nm:find("unlock") and shown(d, bx) then
                 if not (d:IsA("ImageLabel") or d:IsA("ImageButton")) or d.ImageTransparency < 1 then
                     return true
                 end
@@ -709,22 +718,21 @@ local function isLocked(box)
     return false
 end
 
--- highest night that is unlocked, counting up from 1 until the first locked night
 local function highestNight()
     local pg = pl:FindFirstChild("PlayerGui")
     if not pg then return nil end
     local seen, locked = {}, {}
     for _, d in ipairs(pg:GetDescendants()) do
         if d:IsA("GuiObject") then
-            local n, box = d.Name:match("^[Nn]ight[%s_]*(%d)$"), d
+            local n, bx = d.Name:match("^[Nn]ight[%s_]*(%d)$"), d
             if not n and (d:IsA("TextLabel") or d:IsA("TextButton")) then
                 n = d.Text:match("^%s*[Nn][Ii][Gg][Hh][Tt]%s*(%d)%s*$")
-                if n and not d:IsA("TextButton") then box = d.Parent end
+                if n and not d:IsA("TextButton") then bx = d.Parent end
             end
             n = tonumber(n)
-            if n and n >= 1 and n <= 6 and box then
+            if n and n >= 1 and n <= 6 and bx then
                 seen[n] = true
-                if isLocked(box) then locked[n] = true end
+                if isLocked(bx) then locked[n] = true end
             end
         end
     end
@@ -748,29 +756,26 @@ local function nsLoop(key, flag, fn)
     end)
 end
 
-label(pNight, "Night Shift", "text")
+label(pNight, "* Night Shift", true)
 
--- 1) instant join (teleports to the join spot first)
 button(pNight, "Instant join Night Shift", function()
-    NS.Pause = os.clock() + 4 -- pause the safe-place teleport so it doesn't pull you back mid-join
+    NS.Pause = os.clock() + 4
     task.spawn(function()
         local c = pl.Character
         local r = c and c:FindFirstChild("HumanoidRootPart")
         if r then
             r.AssemblyLinearVelocity = Vector3.zero
             r.CFrame = CFrame.new(1191, 342, -1493)
-            task.wait(.3) -- let the server register the new position
+            task.wait(.3)
         end
         pcall(function() Ev:FireServer(buf(B.join), {}) end)
     end)
 end)
 
--- 2) auto play again
 toggle(pNight, "Auto play again", "AutoAgain", function(on)
     if on then nsLoop("again", "AutoAgain", function() nightAction("Vote", "Again") end) end
 end)
 
--- 3) auto vote the highest unlocked night (1-6)
 toggle(pNight, "Auto vote highest night", "AutoVote", function(on)
     if on then
         warnedNight = false
@@ -786,7 +791,6 @@ toggle(pNight, "Auto vote highest night", "AutoVote", function(on)
     end
 end)
 
--- 4) auto teleport to the safe place (keeps you there, re-teleports if you get moved)
 toggle(pNight, "Auto teleport to safe place", "SafeTP", function(on)
     if on then
         nsId.safe += 1
@@ -808,7 +812,6 @@ end)
 
 slider(pNight, "Loop delay (s)", 1, 10, 1, function() return NS.Delay end, function(v) NS.Delay = v end)
 
--- debug: prints every night / lock related GUI object + which night would be voted
 button(pNight, "Print vote UI (debug)", function()
     local pg = pl:FindFirstChild("PlayerGui")
     if not pg then return end
@@ -827,38 +830,35 @@ button(pNight, "Print vote UI (debug)", function()
     end
     print("[Night Shift] matches: " .. count .. " | highest unlocked night: " .. tostring(highestNight()))
 end)
-label(pNight, "Votes 1-6, stops at the first locked night")
+label(pNight, "* Votes 1-6, stops at the first locked night")
 
 -- ===== PLAYER tab =====
-local prof = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, LayoutOrder = nextOrd()}, pPlayer), "BackgroundColor3", "card")
-round(prof, 8)
-local avatar = themed(new("ImageLabel", {Size = UDim2.fromOffset(64, 64), Position = UDim2.fromOffset(10, 10), BorderSizePixel = 0}, prof), "BackgroundColor3", "off")
-round(avatar, 32)
+local prof = new("Frame", {Size = UDim2.new(1, 0, 0, 76), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pPlayer)
+local avatar = new("ImageLabel", {Size = UDim2.fromOffset(64, 64), Position = UDim2.fromOffset(4, 4), BackgroundColor3 = BLACK, BorderSizePixel = 0}, prof)
+new("UIStroke", {Color = WHITE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, avatar)
 pcall(function()
     avatar.Image = Players:GetUserThumbnailAsync(pl.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size150x150)
 end)
-themed(new("TextLabel", {Size = UDim2.new(1, -90, 0, 22), Position = UDim2.fromOffset(82, 12), BackgroundTransparency = 1, Text = pl.DisplayName, Font = Enum.Font.GothamBold, TextSize = 16, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, prof), "TextColor3", "text")
-themed(new("TextLabel", {Size = UDim2.new(1, -90, 0, 16), Position = UDim2.fromOffset(82, 34), BackgroundTransparency = 1, Text = "@" .. pl.Name, Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, prof), "TextColor3", "sub")
-themed(new("TextLabel", {Size = UDim2.new(1, -90, 0, 16), Position = UDim2.fromOffset(82, 52), BackgroundTransparency = 1, Text = "ID: " .. pl.UserId, Font = Enum.Font.Gotham, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left}, prof), "TextColor3", "sub")
+new("TextLabel", {Size = UDim2.new(1, -86, 0, 22), Position = UDim2.fromOffset(80, 6), BackgroundTransparency = 1, Text = pl.DisplayName, Font = FONT, TextSize = 18, TextColor3 = WHITE, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, prof)
+new("TextLabel", {Size = UDim2.new(1, -86, 0, 16), Position = UDim2.fromOffset(80, 30), BackgroundTransparency = 1, Text = "@" .. pl.Name, Font = FONT, TextSize = 13, TextColor3 = GRAY, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, prof)
+new("TextLabel", {Size = UDim2.new(1, -86, 0, 16), Position = UDim2.fromOffset(80, 48), BackgroundTransparency = 1, Text = "ID: " .. pl.UserId, Font = FONT, TextSize = 13, TextColor3 = GRAY, TextXAlignment = Enum.TextXAlignment.Left}, prof)
 
-local info = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 104), BorderSizePixel = 0, LayoutOrder = nextOrd()}, pPlayer), "BackgroundColor3", "card")
-round(info, 8)
+local info = new("Frame", {Size = UDim2.new(1, 0, 0, 84), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pPlayer)
 local function infoLine(y)
-    return themed(new("TextLabel", {Size = UDim2.new(1, -16, 0, 18), Position = UDim2.fromOffset(8, y), BackgroundTransparency = 1, Text = "", Font = Enum.Font.Gotham, TextSize = 13, TextXAlignment = Enum.TextXAlignment.Left, RichText = true}, info), "TextColor3", "text")
+    return new("TextLabel", {Size = UDim2.new(1, 0, 0, 18), Position = UDim2.fromOffset(0, y), BackgroundTransparency = 1, Text = "", Font = FONT, TextSize = 14, TextColor3 = WHITE, TextXAlignment = Enum.TextXAlignment.Left}, info)
 end
-local i1, i2, i3, i4 = infoLine(6), infoLine(30), infoLine(54), infoLine(78)
-i1.Text = "Account age: " .. pl.AccountAge .. " days"
+local i1, i2, i3, i4 = infoLine(0), infoLine(21), infoLine(42), infoLine(63)
+i1.Text = "* Account age: " .. pl.AccountAge .. " days"
 local gameName = "Unknown"
 pcall(function() gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name end)
-i2.Text = "Game: " .. gameName
+i2.Text = "* Game: " .. gameName
 
--- Anti AFK (built in, no remote code): answers Roblox's idle kick by simulating a click
 local afkLoaded = false
-local afkBtn
-afkBtn = button(pPlayer, "Anti AFK", function()
+local afkLbl
+_, afkLbl = button(pPlayer, "Anti AFK", function()
     if afkLoaded then return end
     afkLoaded = true
-    afkBtn.Text = "Anti AFK (on)"
+    afkLbl.Text = "* Anti AFK (on)"
     pl.Idled:Connect(function()
         pcall(function()
             local VU = game:GetService("VirtualUser")
@@ -869,27 +869,28 @@ afkBtn = button(pPlayer, "Anti AFK", function()
 end)
 
 -- ===== ICONS tab =====
-label(pIcons, "Changes the HUD PlayerIcon (only you see it)", "sub")
+label(pIcons, "* Changes the HUD PlayerIcon (only you see it)")
 local function iconRow(i, name)
-    local row = themed(new("TextButton", {Size = UDim2.new(1, 0, 0, 50), BorderSizePixel = 0, Text = "", AutoButtonColor = false, LayoutOrder = nextOrd()}, pIcons), "BackgroundColor3", "card")
-    round(row, 8)
-    local st = new("UIStroke", {Thickness = 1.5, Transparency = 1, Color = T.accent}, row)
-    local th = themed(new("ImageLabel", {Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(8, 6), BorderSizePixel = 0, ScaleType = Enum.ScaleType.Crop}, row), "BackgroundColor3", "off")
-    round(th, 19)
+    local row, hrt = makeRow(pIcons, 46)
+    hrt.Position = UDim2.fromOffset(0, 10)
+    local th = new("ImageLabel", {Size = UDim2.fromOffset(38, 38), Position = UDim2.fromOffset(22, 4), BackgroundColor3 = BLACK, BorderSizePixel = 0, ScaleType = Enum.ScaleType.Crop}, row)
+    new("UIStroke", {Color = WHITE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, th)
     if i == 0 then
         new("TextLabel", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, Text = "↺", TextColor3 = WHITE, Font = Enum.Font.GothamBold, TextSize = 20}, th)
     end
-    themed(new("TextLabel", {Size = UDim2.new(1, -140, 1, 0), Position = UDim2.fromOffset(54, 0), BackgroundTransparency = 1, Text = name, Font = Enum.Font.GothamMedium, TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, row), "TextColor3", "text")
-    local tag = new("TextLabel", {Size = UDim2.fromOffset(72, 50), Position = UDim2.new(1, -80, 0, 0), BackgroundTransparency = 1, Text = "Use", Font = Enum.Font.GothamBold, TextSize = 12, TextColor3 = T.sub, TextXAlignment = Enum.TextXAlignment.Right}, row)
+    local nm = new("TextLabel", {Size = UDim2.new(1, -190, 1, 0), Position = UDim2.fromOffset(68, 0), BackgroundTransparency = 1, Text = "* " .. name, Font = FONT, TextSize = 15, TextColor3 = WHITE, TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd}, row)
+    local tag = new("TextLabel", {Size = UDim2.fromOffset(90, 46), Position = UDim2.new(1, -90, 0, 0), BackgroundTransparency = 1, Text = "[USE]", Font = FONT, TextSize = 13, TextColor3 = GRAY, TextXAlignment = Enum.TextXAlignment.Right}, row)
+    local hov = false
     local function refresh()
         local on = selIcon == i
-        tag.Text = on and "Selected" or "Use"
-        tag.TextColor3 = on and T.accent or T.sub
-        TS:Create(st, TweenInfo.new(.2), {Transparency = on and 0 or 1, Color = T.accent}):Play()
+        tag.Text = on and "[SELECTED]" or "[USE]"
+        tag.TextColor3 = on and T.accent or GRAY
+        nm.TextColor3 = (on or hov) and T.accent or WHITE
     end
-    refresh()
+    reg(refresh)
     iconRefresh[#iconRefresh + 1] = refresh
-    refreshers[#refreshers + 1] = refresh
+    row.MouseEnter:Connect(function() hov = true hrt.Visible = true refresh() end)
+    row.MouseLeave:Connect(function() hov = false hrt.Visible = false refresh() end)
     row.MouseButton1Click:Connect(function() press(row) setIcon(i) end)
     return th
 end
@@ -899,23 +900,24 @@ task.spawn(function()
     for i, ic in ipairs(ICONS) do
         ic.asset = ic.asset or dl(ic.url, "natsuki_icon" .. i .. ".jpg")
         if ic.asset and ic.thumb then ic.thumb.Image = ic.asset end
+        task.wait(.1)
     end
 end)
 
 -- ===== THEME tab =====
-label(pTheme, "Presets", "text")
-local swRow = new("Frame", {Size = UDim2.new(1, 0, 0, 28), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pTheme)
-new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 6)}, swRow)
-for _, p in ipairs(PRESETS) do
-    local sw = new("TextButton", {Size = UDim2.fromOffset(36, 28), BackgroundColor3 = p[2], BorderSizePixel = 0, Text = "", AutoButtonColor = false}, swRow)
-    round(sw, 6)
+label(pTheme, "* Highlight color", true)
+local swRow = new("Frame", {Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, LayoutOrder = nextOrd()}, pTheme)
+new("UIListLayout", {FillDirection = Enum.FillDirection.Horizontal, Padding = UDim.new(0, 8)}, swRow)
+for _, col3 in ipairs(ACCENTS) do
+    local sw = new("TextButton", {Size = UDim2.fromOffset(34, 26), BackgroundColor3 = col3, BorderSizePixel = 0, Text = "", AutoButtonColor = false}, swRow)
+    new("UIStroke", {Color = WHITE, Thickness = 2, ApplyStrokeMode = Enum.ApplyStrokeMode.Border}, sw)
     sw.MouseButton1Click:Connect(function()
         press(sw)
-        T.accent, T.bg, T.card = p[2], p[3], p[4]
+        T.accent = col3
         applyTheme()
     end)
 end
-label(pTheme, "Custom accent color", "text")
+label(pTheme, "* Custom color", true)
 local function channel(name, idx)
     slider(pTheme, name, 0, 255, 1,
         function() return math.floor(({T.accent.R, T.accent.G, T.accent.B})[idx] * 255 + .5) end,
@@ -927,10 +929,9 @@ local function channel(name, idx)
         end)
 end
 channel("Red", 1) channel("Green", 2) channel("Blue", 3)
-label(pTheme, "Presets also change the background and card colors")
 
 applyTheme()
-showTab("Main", false)
+showTab("Main")
 
 -- ================= Live stats =================
 local frames, fps, lastT = 0, 60, os.clock()
@@ -950,17 +951,21 @@ task.spawn(function()
         local ping = 0
         pcall(function() ping = math.floor(Stats.Network.ServerStatsItem["Data Ping"]:GetValue() + .5) end)
         local fcol = fps >= 50 and "#3cc86e" or (fps >= 30 and "#ffc84a" or "#ff6464")
-        statLbl.Text = 'FPS: <font color="' .. fcol .. '">' .. fps .. '</font>  |  Ping: <font color="' .. col(ping, 80, 150) .. '">' .. ping .. ' ms</font>'
+        statLbl.Text = 'FPS <font color="' .. fcol .. '">' .. fps .. '</font>  PING <font color="' .. col(ping, 80, 150) .. '">' .. ping .. '</font>'
 
         local h = hb()
         local r = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
-        stA.Text = 'Status: ' .. (F.Farm and '<font color="#3cc86e">Farming</font>' or '<font color="#ff6464">Idle</font>')
-        stB.Text = BOSSES[BI].name .. ': ' .. (h and '<font color="#3cc86e">Alive</font>' or '<font color="#ff6464">Not found</font>')
-        stC.Text = 'Distance: ' .. ((h and r) and (math.floor((r.Position - pos(h)).Magnitude) .. " studs") or "-")
+        stA.Text = '* Status: ' .. (F.Farm and '<font color="#3cc86e">Farming</font>' or '<font color="#ff6464">Idle</font>')
+        stB.Text = '* ' .. BOSSES[BI].name .. ': ' .. (h and '<font color="#3cc86e">Alive</font>' or '<font color="#ff6464">Not found</font>')
+        stC.Text = '* Distance: ' .. ((h and r) and (math.floor((r.Position - pos(h)).Magnitude) .. " studs") or "-")
 
         local hum = pl.Character and pl.Character:FindFirstChildOfClass("Humanoid")
-        i3.Text = "Health: " .. (hum and (math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth)) or "-")
-        i4.Text = "Players: " .. #Players:GetPlayers() .. " / " .. Players.MaxPlayers
+        if hum and hum.MaxHealth > 0 then
+            hpFill.Size = UDim2.fromScale(math.clamp(hum.Health / hum.MaxHealth, 0, 1), 1)
+            hpText.Text = math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth)
+        end
+        i3.Text = "* Health: " .. (hum and (math.floor(hum.Health) .. " / " .. math.floor(hum.MaxHealth)) or "-")
+        i4.Text = "* Players: " .. #Players:GetPlayers() .. " / " .. Players.MaxPlayers
         task.wait(.25)
     end
 end)
@@ -968,22 +973,17 @@ end)
 -- ================= Minimize / close / hotkey / drag =================
 local minimized = false
 minBtn.MouseButton1Click:Connect(function()
-    press(minBtn)
     minimized = not minimized
     minBtn.Text = minimized and "+" or "-"
-    local ti = TweenInfo.new(.3, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-    if minimized then
-        TS:Create(frame, ti, {Size = UDim2.fromOffset(W, 40)}):Play()
-        task.delay(.3, function() if minimized then body.Visible = false end end)
-    else
-        body.Visible = true
-        TS:Create(frame, ti, {Size = UDim2.fromOffset(W, H)}):Play()
-    end
+    bodyHolder.Visible = not minimized
+    frame.Size = UDim2.fromOffset(W, minimized and TOP or H)
 end)
 closeBtn.MouseButton1Click:Connect(function()
     setFarm(false)
+    titleShake2:Disconnect()
     if iconConn then iconConn:Disconnect() iconConn = nil end
     if iconTarget and iconWant and iconOrig then pcall(function() iconTarget.Image = iconOrig end) end
+    for _, s in pairs(soundCache) do s:Destroy() end
     gui:Destroy()
     blackGui:Destroy()
 end)
@@ -1029,10 +1029,10 @@ local function slashFX(onCovered)
             local fade = TweenInfo.new(.3)
             TS:Create(glow, fade, {BackgroundTransparency = 1, Size = UDim2.fromOffset(3200, 0)}):Play()
             TS:Create(line, fade, {BackgroundTransparency = 1, Size = UDim2.fromOffset(3200, 0)}):Play()
+            task.delay(.4, function() glow:Destroy() line:Destroy() end)
         end)
     end
 
-    -- small slashes (slash sound repeated once per slash)
     local smalls = {{-32, .30, .40}, {24, .66, .56}, {-8, .50, .28}, {58, .38, .66}, {-52, .62, .34}}
     for i = 1, math.min(SMALL_SLASHES, #smalls) do
         local c = smalls[i]
@@ -1041,7 +1041,6 @@ local function slashFX(onCovered)
         task.wait(.3)
     end
 
-    -- last slash: huge + slower + heavy hit
     task.wait(.4)
     local dim = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BackgroundTransparency = 1, BorderSizePixel = 0, ZIndex = 3}, g)
     TS:Create(dim, TweenInfo.new(.5), {BackgroundTransparency = .45}):Play()
@@ -1050,13 +1049,11 @@ local function slashFX(onCovered)
     cut(-35, .5, .5, 30, .5)
     task.wait(.6)
 
-    -- flash, then the screen goes black
     TS:Create(flash, TweenInfo.new(.08), {BackgroundTransparency = 0}):Play()
     task.wait(.12)
     local cover = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BorderSizePixel = 0, ZIndex = 20}, g)
     flash:Destroy()
 
-    -- cracks spread from the center
     local cracks = {}
     for i = 1, 10 do
         local ang = (i / 10) * 360 + math.random(-12, 12)
@@ -1074,7 +1071,6 @@ local function slashFX(onCovered)
     end
     task.wait(.7)
 
-    -- swap the scene underneath, then shatter the black screen into falling shards
     onCovered()
     for _, c in ipairs(cracks) do c:Destroy() end
     cover:Destroy()
@@ -1107,13 +1103,11 @@ sbtn.Visible, heart.Visible = false, false
 say(". . .", .15)
 task.wait(3)
 
--- make sure the sounds finished downloading
 do
     local t0 = os.clock()
     while not soundsDone and os.clock() - t0 < 6 do task.wait() end
 end
 
--- Chara just disappears (Gaster vanish sound)
 tail.Visible, bubble.Visible = false, false
 local charaShake = shake(chara, charaBase, 3, .03)
 playSnd(vanishAsset, 1.3)
@@ -1123,7 +1117,6 @@ charaShake:Disconnect()
 chara.Visible = false
 task.wait(.8)
 
--- Flowey laugh
 playSnd(laughAsset, 1.5)
 task.wait(LAUGH_TIME)
 
@@ -1132,8 +1125,8 @@ slashFX(function()
     titleShake:Disconnect()
     startGui:Destroy()
     live = true
-    frame.Size = UDim2.fromOffset(W * 0.8, H * 0.8)
+    pop.Scale = .8
     gui.Enabled = true
     syncBlack()
-    TS:Create(frame, TweenInfo.new(.45, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Size = UDim2.fromOffset(W, H)}):Play()
+    TS:Create(pop, TweenInfo.new(.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Scale = 1}):Play()
 end)
