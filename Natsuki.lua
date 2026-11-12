@@ -36,6 +36,9 @@ local TEXT_URL = "https://www.myinstants.com/media/sounds/undertale-text.mp3"
 local VANISH_URL = "https://www.myinstants.com/media/sounds/gaster-vanish.mp3"
 local LAUGH_URL = "https://www.myinstants.com/media/sounds/flowey-udnertale-laugh.mp3"
 local CHARA_URL = "https://i.pinimg.com/736x/c5/4c/0f/c54c0fdae6a9bd2336122e7e190d4881.jpg"
+-- paste DIRECT image links here (right-click the pin image > "Copy image address", it starts with https://i.pinimg.com/)
+local SOUL_URL = "https://i.pinimg.com/1200x/3d/91/1e/3d911edb3c3b52e04f6c08b95b3b97ce.jpg"          -- the heart picture
+local SOUL_BROKEN_URL = "https://i.pinimg.com/736x/47/57/90/47579077c0ec8129a76d496701af0a9d.jpg"   -- the shattered heart picture
 local CREEPY_URL = "https://www.myinstants.com/media/sounds/chara-creepy-sound.mp3"
 local LAUGH_TIME = 2.5
 local SMALL_SLASHES = 3
@@ -96,6 +99,12 @@ end
 
 local logoAsset = dl(LOGO_URL, "natsuki_logo.jpg")
 local charaAsset = dl(CHARA_URL, "natsuki_chara.jpg")
+local soulAsset, soulBrokenAsset, soulDone
+task.spawn(function()
+    if SOUL_URL ~= "" then soulAsset = dl(SOUL_URL, "natsuki_soul.jpg") end
+    if SOUL_BROKEN_URL ~= "" then soulBrokenAsset = dl(SOUL_BROKEN_URL, "natsuki_soul_broken.jpg") end
+    soulDone = true
+end)
 local BLACK, WHITE = Color3.new(0, 0, 0), Color3.new(1, 1, 1)
 local RED, ORANGE, GRAY = Color3.fromRGB(255, 30, 30), Color3.fromRGB(255, 140, 0), Color3.fromRGB(140, 140, 150)
 local FONT = Enum.Font.Arcade
@@ -1154,12 +1163,25 @@ local function introSequence(onCovered)
     topH:Destroy() botH:Destroy()
 
     -- 3) the SOUL slowly fades in
-    local soul = new("TextLabel", {
-        AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5), Size = UDim2.fromOffset(90, 90),
-        BackgroundTransparency = 1, Text = "♥", TextColor3 = SOUL_RED, Font = Enum.Font.GothamBold, TextSize = 84,
-        TextTransparency = 1, ZIndex = 6,
-    }, sbg)
-    TS:Create(soul, TweenInfo.new(2.2, Enum.EasingStyle.Sine), {TextTransparency = 0}):Play()
+    do
+        local t0 = os.clock()
+        while not soulDone and os.clock() - t0 < 8 do task.wait() end
+    end
+    local soul
+    if soulAsset then
+        soul = new("ImageLabel", {
+            AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5), Size = UDim2.fromOffset(120, 120),
+            BackgroundTransparency = 1, Image = soulAsset, ScaleType = Enum.ScaleType.Fit, ImageTransparency = 1, ZIndex = 6,
+        }, sbg)
+        TS:Create(soul, TweenInfo.new(2.2, Enum.EasingStyle.Sine), {ImageTransparency = 0}):Play()
+    else
+        soul = new("TextLabel", {
+            AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5), Size = UDim2.fromOffset(90, 90),
+            BackgroundTransparency = 1, Text = "♥", TextColor3 = SOUL_RED, Font = Enum.Font.GothamBold, TextSize = 84,
+            TextTransparency = 1, ZIndex = 6,
+        }, sbg)
+        TS:Create(soul, TweenInfo.new(2.2, Enum.EasingStyle.Sine), {TextTransparency = 0}):Play()
+    end
     task.wait(2.8)
 
     -- 4) slash spam on the SOUL (gets faster)
@@ -1182,6 +1204,7 @@ local function introSequence(onCovered)
     task.wait(.6)
     playSnd(heavyAsset, 1.5)
     cut(-35, .5, .5, 3000, 34)
+    if soulBrokenAsset and soul:IsA("ImageLabel") then soul.Image = soulBrokenAsset end -- the huge slash breaks the heart
     shakeScreen(14, .45)
     task.wait(.25)
     TS:Create(flash, TweenInfo.new(.06), {BackgroundTransparency = 0}):Play()
@@ -1189,6 +1212,14 @@ local function introSequence(onCovered)
     jit:Disconnect()
     local cover = new("Frame", {Size = UDim2.fromScale(1, 1), BackgroundColor3 = BLACK, BorderSizePixel = 0, ZIndex = 20}, g)
     flash:Destroy() dim:Destroy()
+    -- shattered heart picture stays on the black screen while the cracks spread
+    local brokenOnCover
+    if soulBrokenAsset then
+        brokenOnCover = new("ImageLabel", {
+            AnchorPoint = Vector2.new(.5, .5), Position = UDim2.fromScale(.5, .5), Size = UDim2.fromOffset(120, 120),
+            BackgroundTransparency = 1, Image = soulBrokenAsset, ScaleType = Enum.ScaleType.Fit, ZIndex = 22,
+        }, g)
+    end
 
     -- 6) everything cracks...
     local cracks = {}
@@ -1211,6 +1242,7 @@ local function introSequence(onCovered)
 
     -- ...and shatters: black tiles fall away, red SOUL shards burst out, the UI is underneath
     onCovered()
+    if brokenOnCover then brokenOnCover:Destroy() end
     for _, c in ipairs(cracks) do c:Destroy() end
     cover:Destroy()
     local cols, rows = 9, 6
